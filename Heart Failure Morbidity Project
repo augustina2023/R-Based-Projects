@@ -1,0 +1,598 @@
+Date created: November 21st, 2023          Date last modified: December 15th, 2023
+
+# Load packages
+library(readxl)
+library(table1)
+library(ggplot2)
+library(dplyr)
+
+
+# Read in the data and inspect
+mimic_df <- read_xlsx('C:/Users/augustina/Documents/Program/824/MIIMIC_ICU_HF.xlsx')
+mimic3 <- mimic_df
+
+
+#-------------------------------------------------------------------------------
+#### Clean the data and prepare for analysis ####
+#-------------------------------------------------------------------------------
+# Factor Binomial variables
+factor_vars <- c('sex', 'diabetes', 'deficiencyanemias', 'depression',
+                    'Hyperlipemia', 'COPD', 'Renal failure', 'hypertensive', 
+                 'atrialfibrillation', 'CHD with no MI', 'COPD')
+for (name in factor_vars) {
+  mimic3[[name]] <- factor(mimic3[[name]])
+}
+
+# Remove spaces and dashes in column names --> convert to underscore
+for (name in colnames(mimic3)) {
+  if (grepl(' ', name)){
+    new_name <- gsub(' ', '_', name)
+    colnames(mimic3)[colnames(mimic3)== name] <- new_name
+  }
+  else if (grepl('-', name)){
+    new_name <- gsub('-', '_', name)
+  colnames(mimic3)[colnames(mimic3)== name] <- new_name
+  }
+}
+
+# Change variables from character to numeric 
+char_cols <- sapply(mimic3, is.character)
+mimic3[char_cols] <- lapply(mimic3[char_cols], as.numeric)
+
+# Change 'ID' variable to character
+mimic3$ID <- as.character(mimic3$ID)
+str(mimic3) # check
+
+
+#-------------------------------------------------------------------------------
+#### IMPUTATION for Missing Values ####
+#-------------------------------------------------------------------------------
+# Check number of NAs in each column
+for (name in colnames(mimic3)) {
+  print(paste(name, ':', sum(is.na(mimic3[[name]]))))
+}
+# Total NAs
+sum(is.na(mimic3)) #1929
+
+# Impute missing values using PMM
+library(mice)
+mimic3_pmm <- mice(mimic3, method = "pmm", m = 1)
+mimic3_pmm <- complete(mimic3_pmm)
+
+# Verify there are no NAs in each column
+for (name in colnames(mimic3_pmm)) {
+  print(paste(name, ':', sum(is.na(mimic3_pmm[[name]]))))
+}
+
+
+#-------------------------------------------------------------------------------
+#### Create labels for binary values in data frame ####
+#-------------------------------------------------------------------------------
+mimic3_labeled_df <- mimic3_pmm
+
+# Add labels
+for (name in names(mimic3_labeled_df)[-2]) {
+  if (is.factor(mimic3_labeled_df[[name]])) {
+    if (0 %in% levels(mimic3_labeled_df[[name]]) && 1 %in% levels(mimic3_labeled_df[[name]])) {
+      mimic3_labeled_df[[name]] <- factor(mimic3_labeled_df[[name]], labels = c('No', 'Yes'))
+    }
+    else if (1 %in% levels(mimic3_labeled_df[[name]]) && 2 %in% levels(mimic3_labeled_df[[name]])) {
+      mimic3_labeled_df[[name]] <- factor(mimic3_labeled_df[[name]], labels = c('Male', 'Female'))
+    } else {
+      print(paste('Unhandled levels for variable:',name, ':', levels(mimic3_labeled_df[[name]])))
+    }
+  }
+  else {
+    print(paste(name, 'is not a factor'))
+  }
+}
+
+# Label outcome variable
+mimic3_labeled_df$outcome <- factor(mimic3_labeled_df$outcome, levels= c(0,1), labels = c('No_Death', 'Death'))
+
+
+#-------------------------------------------------------------------------------
+#### Exploratory Analysis: Visualization of Vital Signs ####
+#-------------------------------------------------------------------------------
+#SPO2
+O2_density_plot <- ggplot(mimic3_labeled_df, aes(x=SP_O2)) +
+  geom_density() +
+  labs(title = 'Partial Oxygen Distribution')
+O2_density_plot
+# Temperature
+temp_density_plot <- ggplot(mimic3_labeled_df, aes(x=temperature)) +
+  geom_density() +
+  labs(title = 'Temperature Distribution')
+temp_density_plot
+# Heart Rate
+hr_density_plot <- ggplot(mimic3_labeled_df, aes(x=heart_rate)) +
+  geom_density() +
+  labs(title = 'Heart Rate Distribution')
+hr_density_plot
+# Respiratory Rate
+resp_rate_density_plot <- ggplot(mimic3_labeled_df, aes(x=Respiratory_rate)) +
+  geom_density() +
+  labs(title = 'Respiratory Rate Distribution')
+resp_rate_density_plot
+# Diastolic Blood Pressure
+dbp_density_plot <- ggplot(mimic3_labeled_df, aes(x=Diastolic_blood_pressure)) +
+  geom_density() +
+  labs(title = 'Diastolic Blood Pressure Distribution')
+dbp_density_plot
+# Systolic Blood Pressure
+sbp_density_plot <- ggplot(mimic3_labeled_df, aes(x=Systolic_blood_pressure)) +
+  geom_density() +
+  labs(title = 'Systolic Blood Pressure Distribution')
+sbp_density_plot
+
+
+
+#-------------------------------------------------------------------------------
+#### Exploratory Analysis: Deaths Only Outcome ####
+#-------------------------------------------------------------------------------
+# Subset by deaths only
+deaths_only <- mimic3_labeled_df[mimic3_labeled_df$outcome=='Death',]
+summary(deaths_only)
+
+# Table1 for only death as outcome
+var_names2 <- names(deaths_only)[-c(1:2,4)]
+form <- as.formula(paste('~', paste(var_names2, collapse= "+"), '| sex'))
+table2<-table1(form, data= deaths_only )
+table2
+
+# numerical vs categorical variables:
+# Subset into different data frames: Categorical variables
+df_categ <- data.frame(matrix(nrow = nrow(mimic3_labeled_df), ncol = 0))
+for (column in names(mimic3_labeled_df)){
+  if (is.factor(mimic3_labeled_df[[column]])) {
+    df_categ[[column]] <- mimic3_labeled_df[[column]]
+  }
+}
+# Subset into different data frames: Numeric variables
+df_numeric <- data.frame(matrix(nrow = nrow(mimic3_labeled_df), ncol = 0))
+for (column in names(mimic3_labeled_df)){
+  if (is.numeric(mimic3_labeled_df[[column]])) {
+    df_numeric[[column]] <- mimic3_labeled_df[[column]]
+  }
+}
+
+# Check summary of the variables in deaths_only
+summary(df_categ)
+
+# Loop through to see which CATEGORICAL variables had higher incidence, hence contributing to death
+plot_list <- list()
+for (name in names(df_categ)) {
+  if (any(!is.na(df_categ[[name]]) & df_categ[[name]] == 'Yes')) {
+    if (sum(df_categ[[name]] == 'Yes', na.rm = TRUE) >= (0.4) * sum(!is.na(df_categ[[name]]))) {
+      print(paste('High incidence variable (>40%):', name))
+    }
+  }
+}
+
+
+# Loop through to see which NUMERIC variables had higher incidence, hence contributing to death
+for (name in names(df_numeric)) {
+  if (any(!is.na(df_numeric$outcome) & df_numeric$outcome == 'Yes')){ # NEED TO FIX THIS LINE, IF NOT --> REMOVE
+    if (mean(df_numeric[[name]], na.rm = TRUE) <= tail(sort(df_numeric[[name]], decreasing = TRUE), 550)[1]) {
+      print(paste('High incidence variable:', name, 'has a mean of', 
+                  floor(mean(df_numeric[[name]])), ', with a max of', 
+                  floor(max(df_numeric[[name]]))))
+    }
+  }
+}
+
+# Loop through to see which NUMERIC variables had higher incidence, hence contributing to death
+for (name in names(deaths_only)) {
+  if (any(!is.na(deaths_only$outcome) & deaths_only$outcome == 'Yes')){
+    if (mean(is.numeric(deaths_only[[name]]), na.rm = TRUE) >= tail(sort(deaths_only[[name]], decreasing = TRUE),50)[1]) {
+      print(paste('High incidence variable:', name, 'has a mean of:', 
+                  floor(mean(is.numeric(deaths_only[[name]]))), ', with a max of:', 
+                  floor(max(is.numeric(deaths_only[[name]])))))
+    }
+  }
+}
+
+
+label(deaths_only$outcome) <- 'Outcome'
+label(deaths_only$age) <- 'Age'
+label(deaths_only$sex) <- 'Sex'
+label(deaths_only$hypertensive) <- "Hypertensive"
+label(deaths_only$atrialfibrillation) <- 'Atrial Fibrillation'
+label(deaths_only$CHD_with_no_MI) <- "Coronary Heart Disease with no Myocardial Infraction"
+label(deaths_only$diabetes) <- 'Diabetes'
+label(deaths_only$deficiencyanemias) <- 'Deficiency Anemias'
+label(deaths_only$depression) <- 'Depression'
+label(deaths_only$heart_rate) <- 'Heart Rate'
+label(deaths_only$temperature) <- 'Temparature'
+label(deaths_only$SP_O2) <- 'Saturation Pulse Oxygen (%)'
+label(deaths_only$hematocrit) <- 'Hematocrit'
+label(deaths_only$RBC) <- 'Red Blood Cells'
+label(deaths_only$PT) <- 'Prothrombin Time'
+label(deaths_only$INR) <- 'International Normalized Ratio'
+label(deaths_only$glucose) <- 'Glucose'
+label(deaths_only$PCO2) <- 'Partial Pressure of CO2'
+label(deaths_only$EF) <- 'Ejection Fraction'
+
+  
+# Create table1
+var_do_names <- names(deaths_only)[-c(1:2, 4)]
+form_do <- as.formula(paste('~', paste(var_do_names, collapse= "+"), '| sex'))
+table_do<-table1(form_do, data= deaths_only )
+table_do
+
+
+mean(deaths_only$Leucocyte) # 13.4367
+mean(deaths_only$Lymphocyte) # 9.427372
+mean(deaths_only$Platelets) # 216.2698
+mean(deaths_only$Neutrophils) # 82.02083
+mean(deaths_only$Basophils) # 0.4134896
+
+
+
+#-------------------------------------------------------------------------------
+#### Subset Selection: Forward Step-Wise Regression ####
+#-------------------------------------------------------------------------------
+# Forward step-wise regression
+library(leaps)
+
+mimic_vars <- mimic3_pmm[,-c(1)]
+swr_forward <- regsubsets(outcome ~ ., data=mimic_vars,
+                           nvmax = 48, method = 'forward')
+forward_summary <- summary(swr_forward); forward_summary
+
+forward_summary$rsq <- round(forward_summary$rsq, digits = 3)
+max_value <- max(forward_summary$rsq)
+paste('Maximum R^2:', max_value) # 0.408 before; after pmm-> 0.264
+# Find the maximum value
+max_index <- which(forward_summary$rsq == max_value)[1]
+paste('Maximum predictors:', max_index)
+
+coef(swr_forward, max_index) # 45 before; after pmm-> 37
+forward_summary$mse
+forward_summary$bic
+
+
+
+#-------------------------------------------------------------------------------
+#### Subset Selection: Lasso Regression ####
+#-------------------------------------------------------------------------------
+# Lasso Regression
+library(caret)
+library(glmnet)
+
+set.seed(12152023)
+
+X <- mimic3_pmm[,-c(1:2)]
+y <- mimic3_pmm$outcome
+
+# Scale predictors to bring them to same scale
+numeric_columns <- sapply(X, is.numeric)
+# Extract and scale only the numeric columns
+numeric_data <- X[, numeric_columns]
+scaled_numeric_data <- scale(numeric_data)
+X_scaled_df <- cbind(X[, !numeric_columns, drop = FALSE], scaled_numeric_data)
+
+# Create training and testing sets using the indices
+index <- createDataPartition(y, p = 0.8, list = FALSE)
+training_set <- X_scaled_df[index, ]
+testing_set <- X_scaled_df[-index, ]
+dim(training_set)
+dim(testing_set)
+
+X_train <- training_set
+y_train <- y[index] 
+y <- as.numeric(y)
+
+# Fit the Lasso regression
+lasso_fit <- glmnet(x = as.matrix(X_train), y = y_train, alpha = 1, lambda = c(0, 1, 100, 1000))
+
+head(coef(lasso_fit))
+plot(lasso_fit)
+
+# Determining lambda for LASSO by cross validation
+lasso_cv <- cv.glmnet(x = as.matrix(X_train), y = y_train, alpha = 1)
+plot(lasso_cv)
+
+# Choose the lambda that minimizes the cross-validated mean squared error
+best_lambda <- lasso_cv$lambda.min
+print(paste('Best lambda:', round(best_lambda, digits=3))) #0.4/0.1 before; after pmm --> 0.05
+
+# Fit the model onto the entire dataset using best lambda
+lasso_fit_final <-glmnet(X, y, alpha = 1)
+lasso_coef <- predict(lasso_fit_final, s=best_lambda, type='coefficients')
+
+# Extract variable names with non-zero coefficients
+selected_variables <- rownames(lasso_coef)[lasso_coef@i + 1]
+print(selected_variables) # 34 before; 35 after pmm
+
+# check R2 value and compare to the FSWR
+paste('The maximum R^2 for the Lasso model:', 
+      round(max(lasso_fit$dev.ratio), digits=3)) # 0.434 before; after pmm --> 0.263
+
+
+
+#-------------------------------------------------------------------------------
+#### Perform Logistic Regression using variables from Subset Selection #### 
+#-------------------------------------------------------------------------------
+
+# Use subset of variables output from Lasso regression
+X_scaled_df <- cbind(X_scaled_df, mimic3_pmm$outcome)
+names(X_scaled_df)
+colnames(X_scaled_df)<- c( "sex", "hypertensive", "atrialfibrillation", "CHD_with_no_MI", "diabetes",
+      "deficiencyanemias", "depression", "Hyperlipemia",  "Renal_failure", "COPD",
+      "age", "BMI", "heart_rate",  "Systolic_blood_pressure", 
+      "Diastolic_blood_pressure", "Respiratory_rate",  "temperature", "SP_O2", 
+      "Urine_output",  "hematocrit", "RBC", "MCH", "MCHC", "MCV", "RDW", 
+      "Leucocyte", "Platelets", "Neutrophils",  "Basophils", "Lymphocyte","PT", 
+      "INR","NT_proBNP","Creatine_kinase",  "Creatinine", "Urea_nitrogen", 
+      "glucose","Blood_potassium","Blood_sodium","Blood_calcium","Chloride",
+      "Anion_gap","Magnesium_ion","PH","Bicarbonate", "Lactic_acid","PCO2","EF",
+      "outcome")
+select_vars_mimic_df <- X_scaled_df[,c(names(selected_data))]
+names(select_vars_mimic_df)
+
+set.seed(12152023)
+
+XX <- select_vars_mimic_df[,(-34)]
+y <- select_vars_mimic_df$outcome
+
+# Create training and testing sets
+indexx <- createDataPartition(y, p = 0.8, list = FALSE)
+training_set <- select_vars_mimic_df[indexx, ]
+testing_set <- select_vars_mimic_df[-indexx, ]
+
+# Logistic model
+logistic_model <- glm(outcome ~ ., data = training_set, family = 'binomial')
+
+# Make predictions on the test set
+predictions <- predict(logistic_model, newdata = testing_set, type = "response")
+predicted_classes <- ifelse(predictions > 0.5, 1, 0)
+
+# Create a confusion matrix
+conf_matrix <- table(Actual = testing_set$outcome, Predicted = predicted_classes)
+conf_matrix
+
+# Calculate accuracy, sensitivity, and specificity on test set
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+sensitivity <- conf_matrix[2, 2] / sum(conf_matrix[2, ])
+specificity <- conf_matrix[1, 1] / sum(conf_matrix[1, ])
+cat("Accuracy:", round(accuracy, digits=3)) # 0.9294118; 0.868 after pmm
+cat("Sensitivity:", round(sensitivity, digits=3)) # 0.5; 0.33 after pmm
+cat("Specificity:", round(specificity, digits=3)) # 0.9866667; 0.965 after pmm
+# 74 true negatives, 5 true positives, 5 false negatives, 1 false positive-->before(na.omit)
+# 192 true negatives, 12 true positives, 7 false negatives, 24 false positive--> after pmm
+
+
+
+#-------------------------------------------------------------------------------
+#### Predictions made on the entire data set ####
+#-------------------------------------------------------------------------------
+predictions_full_df <- predict(logistic_model, newdata = select_vars_mimic_df, type = "response")
+predicted_classes_full_df <- ifelse(predictions_full_df > 0.5, 1, 0)
+
+# Confusion matrix + calculate accuracy, sensitivity, and specificity on test set
+conf_matrix_full_df <- table(Actual = select_vars_mimic_df$outcome, Predicted = predicted_classes_full_df)
+conf_matrix_full_df
+accuracy_full_df <- sum(diag(conf_matrix_full_df)) / sum(conf_matrix_full_df)
+sensitivity_full_df <- conf_matrix_full_df[2, 2] / sum(conf_matrix_full_df[2, ])
+specificity_full_df <- conf_matrix_full_df[1, 1] / sum(conf_matrix_full_df[1, ])
+cat("Accuracy:", round(accuracy_full_df, digits=3)) # 0.9135514; 0.891 after pmm
+cat("Sensitivity:", round(sensitivity_full_df, digits=3)) # 0.5692308; 0.34; after pmm
+cat("Specificity:", round(specificity_full_df, digits=3)) # 0.9752066; 0.977 after pmm
+
+# 354 true negatives, 37 true positives, 28 false negatives, 9 false positives
+# 996 true negatives, 54 true positives, 23 false negatives, 105 false positives-->after pmmm
+# 998 true negatives, 57 true positives, 102 false negatives, 20 false positives
+
+mean(deaths_only$heart_rate) # 90.96335; 89.8302 after pmm
+mean(deaths_only$Systolic_blood_pressure) # 112.1154; 112.1147 after pmm
+mean(deaths_only$Diastolic_blood_pressure) # 57.66929; 57.19885 after pmm
+mean(deaths_only$Respiratory_rate) # 22.40857; 21.98122 after pmm
+mean(deaths_only$temperature) # 36.48723; 36.53234 after pmm
+mean(deaths_only$SP_O2) # 95.92599; 95.8782 after pmm
+mean(deaths_only$Urine_output) #1327
+
+
+
+#-------------------------------------------------------------------------------
+#### Visualize Selected subset #### 
+#-------------------------------------------------------------------------------
+# Extract the selected variables and the outcome variable
+selected_variables <- intersect(selected_variables, colnames(mimic3_pmm))
+selected_data <- mimic3_pmm[, c(selected_variables, "outcome")]
+
+# Table 1 with selected variables
+s_data<- mimic3_labeled_df[,c(names(selected_data))]
+
+label(s_data$outcome) <- 'Outcome'
+label(s_data$age) <- 'Age'
+label(s_data$sex) <- 'Sex'
+label(s_data$hypertensive) <- "Hypertensive"
+label(s_data$atrialfibrillation) <- 'Atrial Fibrillation'
+label(s_data$diabetes) <- 'Diabetes'
+label(s_data$deficiencyanemias) <- 'Deficiency Anemias'
+label(s_data$depression) <- 'Depression'
+label(s_data$Renal_failure) <- 'Renal Failure'
+label(s_data$heart_rate) <- 'Heart Rate'
+label(s_data$temperature) <- 'Temparature'
+label(s_data$SP_O2) <- 'SPO2'
+label(s_data$Urine_output) <- 'Urine Output'
+label(s_data$NT_proBNP) <- 'NT proBNP'
+label(s_data$Diastolic_blood_pressure) <- 'Diastolic Blood Pressure'
+label(s_data$Respiratory_rate) <- 'Respiratory Rate'
+label(s_data$Creatine_kinase) <- 'Creatine kinase'
+label(s_data$Urea_nitrogen) <- 'Urea Nitrogen'
+label(s_data$Blood_potassium) <- 'Potassium'
+label(s_data$Blood_calcium) <- 'Calcium'
+label(s_data$Anion_gap) <- 'Anion Gap'
+label(s_data$Magnesium_ion) <- 'Magnesium Ion'
+label(s_data$Lactic_acid) <- 'Lactic Acid'
+
+selected_names <- names(s_data)[-35]
+selectd_form <- as.formula(paste('~', paste(selected_names, collapse= "+"), '| outcome'))
+selected_table<-table1(selectd_form, data= s_data )
+selected_table
+
+# Comparative density plots for the variables from the subset selection
+scat_urine_output <- ggplot(s_data, aes(x = Urine_output, fill = outcome)) +
+  geom_density() +
+  labs(title = 'Distribution of Urine Output by Outcome Status', x = 'Urine Output', y = 'Density', fill = 'outcome')
+scat_urine_output
+
+scat_Leucocyte <- ggplot(s_data, aes(x = Leucocyte, fill = outcome)) +
+  geom_density() +
+  labs(title = 'Distribution of Leucocytes by Outcome Status', x = 'Leucocytes', y = 'Density', fill = 'outcome')
+scat_Leucocyte
+
+scat_Platelets <- ggplot(s_data, aes(x = Platelets, fill = outcome)) +
+  geom_density() +
+  labs(title = 'Distribution of Platelets by Outcome Status', x = 'Platelets', y = 'Density', fill = 'outcome')
+scat_Platelets
+
+scat_Lymphocyte <- ggplot(s_data, aes(x = Lymphocyte, fill = outcome)) +
+  geom_density() +
+  labs(title = 'Distribution of Lymphocytes by Outcome Status', x = 'Lymphocytes', y = 'Density', fill = 'outcome')
+scat_Lymphocyte
+
+
+
+#-------------------------------------------------------------------------------
+#### Visualize Data after Logistic Regression #### 
+#-------------------------------------------------------------------------------
+
+# Create a heatmap
+numeric_matrix <- data.matrix(select_vars_mimic_df)
+# Create a heatmap
+heatmap(numeric_matrix)
+
+# ROC/AUC
+# install.packages('ROCR')
+library(ROCR)
+# install.packages("pROC")
+library(pROC)
+
+# ROC for the test dataset
+final_test_outcome <- testing_set$outcome
+predictions <- predict(logistic_model, newdata = testing_set, type = "response")
+#Create ROCR prediction object
+roc_test_predictions <- ROCR::prediction(predictions, final_test_outcome)
+# Calculate ROC performance with AUC
+roc_test_performance <- ROCR::performance(roc_test_predictions, measure = "tpr", x.measure = "fpr")
+roc_test_perform_auc <- ROCR::performance(roc_test_predictions, measure = 'auc')
+# Access AUC value
+test_auc_value <- roc_test_perform_auc@y.values[[1]]
+print(test_auc_value) # 0.8366687
+# Plot ROC curve
+# options(repr.plot.width=8, repr.plot.height=6)
+# plot(roc_test_performance, colorize = TRUE, title(main = 'ROC for Logistic Regression Model (AUC=0.836)'))
+roc_curve_test <- roc(testing_set$outcome, predictions)
+plot(roc_curve_test, col = "blue", main = "ROC Curve for Logistic Regression Model (Test AUC=0.836)")
+
+
+# ROC for the full dataset
+final_outcome <- select_vars_mimic_df$outcome
+predictions_full_df <- predict(logistic_model, newdata = select_vars_mimic_df, type = "response")
+#Create ROCR prediction object
+roc_predictions <- ROCR::prediction(predictions_full_df, final_outcome)
+# Calculate ROC performance with AUC
+roc_performance <- ROCR::performance(roc_predictions, measure = "tpr", x.measure = "fpr")
+roc_perform_auc <- ROCR::performance(roc_predictions, measure = 'auc')
+# Access AUC value
+auc_value <- roc_perform_auc@y.values[[1]]
+print(auc_value) # 0.8597447
+# Plot ROC curve
+# options(repr.plot.width=8, repr.plot.height=6)
+# plot(roc_performance, colorize = TRUE, title(main = 'ROC for Logistic Regression Model'))
+roc_curve_full <- roc(select_vars_mimic_df$outcome, predictions_full_df)
+plot(roc_curve_full, col = "blue", main = "ROC Curve for Logistic Regression Model (Test AUC=0.859)")
+
+
+
+#-------------------------------------------------------------------------------
+#### Class Imbalance Remedy ####
+#-------------------------------------------------------------------------------
+# install.packages('ROSE')
+library(ROSE)
+
+# Balance the data
+balanced_classes <- ovun.sample(outcome ~ ., data= select_vars_mimic_df, method = 'over', N=2034)$data
+table(balanced_classes$outcome)
+
+# Perform model: Logistic model
+set.seed(12152023)
+xb <- balanced_classes[,(-34)]
+yb <- balanced_classes$outcome
+
+# Create training and testing sets
+index_b <- createDataPartition(yb, p = 0.8, list = FALSE)
+balanced_training_set <- balanced_classes[index_b, ]
+balanced_testing_set <- balanced_classes[-index_b, ]
+
+balanced_logistic_model <- glm(outcome ~ ., data = balanced_classes, family = 'binomial')
+
+# Make predictions on the test set
+balanced_predictions <- predict(balanced_logistic_model, newdata = balanced_testing_set, type = "response")
+balanced_predicted_classes <- ifelse(balanced_predictions > 0.5, 1, 0)
+
+# Create a confusion matrix on test set. Calculate accuracy, sensitivity, specificity
+balanced_conf_matrix <- table(Actual = balanced_testing_set$outcome, Predicted = balanced_predicted_classes)
+balanced_conf_matrix
+
+balanced_accuracy_t <- sum(diag(balanced_conf_matrix)) / sum(balanced_conf_matrix)
+balanced_sensitivity_t <- balanced_conf_matrix[2, 2] / sum(balanced_conf_matrix[2, ])
+balanced_specificity_t <- balanced_conf_matrix[1, 1] / sum(balanced_conf_matrix[1, ])
+cat("Accuracy:", round(balanced_accuracy_t, digits=3)) # 0.754
+cat("Sensitivity:", round(balanced_sensitivity_t, digits=3)) # 0.704
+cat("Specificity:", round(balanced_specificity_t, digits=3)) # 0.803
+# 163 true negatives, 143 true positives, 60 false negatives, 40 false positives
+# 166 true negatives, 163 true positives, 33 false negatives, 44 false positives
+
+# ROC and AUC for test set
+balanced_outcome <- balanced_testing_set$outcome
+balanced_predictions <- predict(balanced_logistic_model, newdata = balanced_testing_set, type = "response")
+
+#Create ROCR prediction object for test set
+roc_test_balanced <- ROCR::prediction(balanced_predictions, balanced_outcome)
+# Calculate ROC performance with AUC
+roc_balanced_performance_t <- ROCR::performance(roc_test_balanced, measure = "tpr", x.measure = "fpr")
+roc_balanced_perform_auc_t <- ROCR::performance(roc_test_balanced, measure = 'auc')
+# Access AUC value
+balanced_auc_value_t <- roc_balanced_perform_auc_t@y.values[[1]]
+print(balanced_auc_value_t) # 0.8648596
+# Plot ROC curve
+roc_curve_balanced <- roc(balanced_testing_set$outcome, balanced_predictions)
+plot(roc_curve_balanced, col = "blue", main = "ROC Curve After Balancing (AUC=0.878)")
+
+# ------------------------------------------------------------------------------
+
+# Make predictions on the entire population of data set
+balanced_predictions_full <- predict(balanced_logistic_model, newdata = balanced_classes, type = "response")
+balanced_pred_class_full <- ifelse(balanced_predictions_full > 0.5, 1, 0)
+
+# Confusion matrix + calculate accuracy, sensitivity, and specificity on test set
+balanced_conf_matrix_full <- table(Actual = balanced_classes$outcome, Predicted = balanced_pred_class_full)
+balanced_conf_matrix_full
+balanced_accuracy_full <- sum(diag(balanced_conf_matrix_full)) / sum(balanced_conf_matrix_full)
+balanced_sensitivity_full <- balanced_conf_matrix_full[2, 2] / sum(balanced_conf_matrix_full[2, ])
+balanced_specificity_full <- balanced_conf_matrix_full[1, 1] / sum(balanced_conf_matrix_full[1, ])
+cat("Accuracy:", round(balanced_accuracy_full, digits=3)) # 0.763
+cat("Sensitivity:", round(balanced_sensitivity_full, digits=3)) # 0.754
+cat("Specificity:", round(balanced_specificity_full, digits=3)) # 0.771
+# 784 true negatives, 767 true positives, 250 false negatives, 233 false positives
+# 796 true negatives, 776 true positives, 240 false negatives, 222 false positives
+# balanced_classes$outcome --> 1017 observations x 2= 2034 observations (0 and 1))
+
+# ROC and AUC on all observations from dataset
+balanced_outcome_full <- balanced_classes$outcome
+balanced_predictions_full <- predict(balanced_logistic_model, newdata = balanced_classes, type = "response")
+#Create ROCR prediction object
+roc_balanced <- ROCR::prediction(balanced_predictions_full, balanced_outcome_full)
+# Calculate ROC performance with AUC
+roc_balanced_performance_f <- ROCR::performance(roc_balanced, measure = "tpr", x.measure = "fpr")
+roc_balanced_perform_auc_f <- ROCR::performance(roc_balanced, measure = 'auc')
+# Access AUC value
+balanced_auc_value_f <- roc_balanced_perform_auc_f@y.values[[1]]
+print(balanced_auc_value_f) # 0.8643735
+# Plot ROC curve
+roc_curve_balanced_full <- roc(balanced_classes$outcome, balanced_predictions_full)
+plot(roc_curve_balanced_full, col = "blue", main = "ROC Curve for After Balancing (AUC=0.857)")
