@@ -1,4 +1,6 @@
 # R-Based-Projects
+The projects in this repository were created using R Studio Version 2023.09.1+494 "Desert Sunflower" Release (cd7011dce393115d3a7c3db799dda4b1c7e88711, 2023-10-16) for Windows (R Version 4.3.1).
+
 
 ## Heart Failure Morbidity Project
 ### Goal
@@ -8,5 +10,6 @@ The data used in this program is sourced from the Medical Information Mart for I
 ### Data Cleaning & Feature Engineering
   - Data Cleaning. Prior to analysis and subset creation using R Studio Version 2023.09.1+494 "Desert Sunflower" Release (cd7011dce393115d3a7c3db799dda4b1c7e88711, 2023-              10- 16) for Windows (R Version 4.3.1), the data is cleaned. 
   - Feature Engineering. There are 1929 missing values within the dataset, which vary in proportion depending on the variable. Predictive mean matching (PMM) is performed on the      dataset.
+
 
 ## ABx Project
